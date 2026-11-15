@@ -1,6 +1,7 @@
 # Release Notes
 All notable changes to this package will be documented in this file.
 
+## 0.2.1
 - Simplify normalizeQueryDate Jalali detection to a year band and expand API docs
 
 ## 0.2.0
