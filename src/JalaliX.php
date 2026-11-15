@@ -11,7 +11,7 @@ use InvalidArgumentException;
 
 /**
  * Jalali (Persian / Shamsi) calendar on top of a millisecond timestamp.
- * Pure PHP port of @jalalix/typescript — same algorithm and camelCase API.
+ * Pure PHP port of @jalalix/typescript - same algorithm and camelCase API.
  */
 class JalaliX
 {
@@ -316,7 +316,7 @@ class JalaliX
         $dt = $this->dateTime();
         $year = (int) $dt->format('Y');
 
-        // Match JS `new Date(year, 0, 0)` — Dec 31 of previous year, local midnight
+        // Match JS `new Date(year, 0, 0)` - Dec 31 of previous year, local midnight
         $start = new DateTimeImmutable(sprintf('%04d-01-01 00:00:00.000', $year), $dt->getTimezone());
         $start = $start->modify('-1 day');
 
@@ -870,14 +870,15 @@ class JalaliX
      *
      * Handles empty/sentinel values (`null`, `undefined`, `Invalid Date`, `NaN`), unix timestamps
      * (seconds or milliseconds), Persian/Arabic digits, `/` `-` `.` separators, fractional seconds,
-     * optional `Z` / offset suffixes, and auto-detects Jalali vs Gregorian:
-     * Jalali years start at 1; when both calendars are valid, the interpretation closer to now wins.
+     * optional `Z` / offset suffixes, and auto-detects Jalali vs Gregorian by year band:
+     * years in `jalaliYearMin…jalaliYearMax` (default `1…1899`) are treated as Jalali when the
+     * civil date is valid; otherwise Gregorian.
      *
      * Invalid or unrecognized values are returned cleaned (digits normalized) rather than throwing;
      * sentinels and non-positive timestamps return `null`. Non-string / non-numeric values pass through.
      *
      * @param mixed $value Raw query value.
-     * @param array{timezone?: string}|null $options Optional timezone for timestamp / Jalali conversion.
+     * @param array{timezone?: string, jalaliYearMin?: int, jalaliYearMax?: int}|null $options
      * @return mixed `null`, Gregorian `Y-m-d H:i:s`, cleaned string, or the original non-scalar value.
      */
     public static function normalizeQueryDate(mixed $value, ?array $options = null): mixed
@@ -929,51 +930,29 @@ class JalaliX
         $minute = isset($matches[5]) ? (int) $matches[5] : 0;
         $second = isset($matches[6]) ? (int) $matches[6] : 0;
 
-        /** @var list<array{ms: int, formatted: string}> $candidates */
-        $candidates = [];
+        $jalaliYearMin = isset($options['jalaliYearMin']) ? (int) $options['jalaliYearMin'] : 1;
+        $jalaliYearMax = isset($options['jalaliYearMax']) ? (int) $options['jalaliYearMax'] : 1899;
 
-        if ($year >= 1 && self::isValidJalaliCivilDate($year, $month, $day)) {
+        if (
+            $year >= $jalaliYearMin
+            && $year <= $jalaliYearMax
+            && self::isValidJalaliCivilDate($year, $month, $day)
+        ) {
             try {
-                $jalali = self::parseJalali(
+                return self::parseJalali(
                     sprintf('%04d/%02d/%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second),
                     $options
-                );
-                $candidates[] = [
-                    'ms' => $jalali->getTime(),
-                    'formatted' => $jalali->format('YYYY-MM-DD HH:mm:ss', ['calendar' => 'gregorian']),
-                ];
+                )->format('YYYY-MM-DD HH:mm:ss', ['calendar' => 'gregorian']);
             } catch (InvalidArgumentException) {
-                // ignore invalid Jalali interpretation
+                // fall through to Gregorian / cleaned
             }
         }
 
         if (checkdate($month, $day, $year)) {
-            $gregorian = sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
-
-            try {
-                $ms = self::create($gregorian, $options)->getTime();
-                $candidates[] = ['ms' => $ms, 'formatted' => $gregorian];
-            } catch (InvalidArgumentException) {
-                $candidates[] = ['ms' => 0, 'formatted' => $gregorian];
-            }
+            return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
         }
 
-        if ($candidates === []) {
-            return $digits;
-        }
-
-        if (count($candidates) === 1) {
-            return $candidates[0]['formatted'];
-        }
-
-        $now = self::create((int) floor(microtime(true) * 1000), $options)->getTime();
-
-        usort(
-            $candidates,
-            static fn (array $a, array $b): int => abs($a['ms'] - $now) <=> abs($b['ms'] - $now)
-        );
-
-        return $candidates[0]['formatted'];
+        return $digits;
     }
 
     /**
@@ -993,13 +972,7 @@ class JalaliX
             return $day <= 30;
         }
 
-        $probe = self::create(0);
-        $isLeap = (static function () use ($probe, $year): bool {
-            $method = new \ReflectionMethod(self::class, 'checkLeapYear');
-            $method->setAccessible(true);
-
-            return (bool) $method->invoke($probe, $year);
-        })();
+        $isLeap = self::create(0)->checkLeapYear($year);
 
         return $day <= ($isLeap ? 30 : 29);
     }

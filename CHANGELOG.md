@@ -1,6 +1,8 @@
 # Release Notes
 All notable changes to this package will be documented in this file.
 
+- Simplify normalizeQueryDate Jalali detection to a year band and expand API docs
+
 ## 0.2.0
 - Added `normalizeQueryDate` for loose query/form inputs (sentinels, unix s/ms, Jalali vs Gregorian auto-detect; default year band `1…1899`, overridable via `jalaliYearMin` / `jalaliYearMax`)
 - `fromPersian` also converts Arabic-Indic digits (`٠-٩`)
