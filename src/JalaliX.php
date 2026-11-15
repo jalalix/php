@@ -44,6 +44,9 @@ class JalaliX
     /** @var list<string> */
     public static array $persianNumbers = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
 
+    /** @var list<string> */
+    public static array $arabicNumbers = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+
     private string $am = 'ق.ظ.';
     private string $pm = 'ب.ظ.';
     private string $amGregorian = 'AM';
@@ -828,7 +831,8 @@ class JalaliX
 
     /**
      * Parses a Jalali date string into a JalaliX instance.
-     * Accepts `YYYY/MM/DD` or `YYYY-MM-DD`, optional time (`HH:mm` / `HH:mm:ss`), and Persian digits.
+     * Accepts `YYYY/MM/DD`, `YYYY-MM-DD`, or `YYYY.MM.DD`, optional time (`HH:mm` / `HH:mm:ss`),
+     * and Persian / Arabic-Indic digits.
      * Named `parseJalali` because `Date.parse` already exists on the base class.
      * @param string $value Jalali date string (e.g. "1403/12/07", "۱۴۰۳-۱۲-۰۷ 14:30").
      * @param array{timezone?: string}|null $options Optional configuration including timezone.
@@ -839,7 +843,7 @@ class JalaliX
         $normalized = self::fromPersian((string) $value);
         $normalized = trim($normalized);
 
-        if (!preg_match('/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/', $normalized, $match)) {
+        if (!preg_match('/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/', $normalized, $match)) {
             throw new InvalidArgumentException('JalaliX.parseJalali: invalid Jalali date "' . $value . '"');
         }
 
@@ -859,6 +863,162 @@ class JalaliX
         $output->setHours($hours, $minutes, $seconds, 0);
 
         return $output;
+    }
+
+    /**
+     * Soft-normalizes loose query / form date inputs into a Gregorian `Y-m-d H:i:s` string.
+     *
+     * Handles empty/sentinel values (`null`, `undefined`, `Invalid Date`, `NaN`), unix timestamps
+     * (seconds or milliseconds), Persian/Arabic digits, `/` `-` `.` separators, fractional seconds,
+     * optional `Z` / offset suffixes, and auto-detects Jalali vs Gregorian:
+     * Jalali years start at 1; when both calendars are valid, the interpretation closer to now wins.
+     *
+     * Invalid or unrecognized values are returned cleaned (digits normalized) rather than throwing;
+     * sentinels and non-positive timestamps return `null`. Non-string / non-numeric values pass through.
+     *
+     * @param mixed $value Raw query value.
+     * @param array{timezone?: string}|null $options Optional timezone for timestamp / Jalali conversion.
+     * @return mixed `null`, Gregorian `Y-m-d H:i:s`, cleaned string, or the original non-scalar value.
+     */
+    public static function normalizeQueryDate(mixed $value, ?array $options = null): mixed
+    {
+        $isInvalidDate = is_string($value) && (
+            strcasecmp($value, 'Invalid Date') === 0
+            || preg_match('/NaN/i', $value) === 1
+        );
+
+        if (
+            $value === null
+            || $value === 'null'
+            || $value === ''
+            || $value === 'undefined'
+            || $isInvalidDate
+        ) {
+            return null;
+        }
+
+        if (is_numeric($value) && !is_string($value)) {
+            return self::normalizeQueryTimestamp((int) $value, $options);
+        }
+
+        if (is_string($value) && is_numeric(trim($value))) {
+            return self::normalizeQueryTimestamp((int) trim($value), $options);
+        }
+
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        $digits = self::fromPersian($value);
+        $digits = preg_replace('/(\d{2}:\d{2}:\d{2})\.\d+/', '$1', $digits) ?? $digits;
+
+        if (
+            preg_match(
+                '/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:Z|[+-]\d{2}:?\d{2})?)?/',
+                $digits,
+                $matches
+            ) !== 1
+        ) {
+            return $digits;
+        }
+
+        $year = (int) $matches[1];
+        $month = (int) $matches[2];
+        $day = (int) $matches[3];
+        $hour = isset($matches[4]) ? (int) $matches[4] : 0;
+        $minute = isset($matches[5]) ? (int) $matches[5] : 0;
+        $second = isset($matches[6]) ? (int) $matches[6] : 0;
+
+        /** @var list<array{ms: int, formatted: string}> $candidates */
+        $candidates = [];
+
+        if ($year >= 1 && self::isValidJalaliCivilDate($year, $month, $day)) {
+            try {
+                $jalali = self::parseJalali(
+                    sprintf('%04d/%02d/%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second),
+                    $options
+                );
+                $candidates[] = [
+                    'ms' => $jalali->getTime(),
+                    'formatted' => $jalali->format('YYYY-MM-DD HH:mm:ss', ['calendar' => 'gregorian']),
+                ];
+            } catch (InvalidArgumentException) {
+                // ignore invalid Jalali interpretation
+            }
+        }
+
+        if (checkdate($month, $day, $year)) {
+            $gregorian = sprintf('%04d-%02d-%02d %02d:%02d:%02d', $year, $month, $day, $hour, $minute, $second);
+
+            try {
+                $ms = self::create($gregorian, $options)->getTime();
+                $candidates[] = ['ms' => $ms, 'formatted' => $gregorian];
+            } catch (InvalidArgumentException) {
+                $candidates[] = ['ms' => 0, 'formatted' => $gregorian];
+            }
+        }
+
+        if ($candidates === []) {
+            return $digits;
+        }
+
+        if (count($candidates) === 1) {
+            return $candidates[0]['formatted'];
+        }
+
+        $now = self::create((int) floor(microtime(true) * 1000), $options)->getTime();
+
+        usort(
+            $candidates,
+            static fn (array $a, array $b): int => abs($a['ms'] - $now) <=> abs($b['ms'] - $now)
+        );
+
+        return $candidates[0]['formatted'];
+    }
+
+    /**
+     * Whether Y/M/D is a valid Jalali civil date (year >= 1).
+     */
+    private static function isValidJalaliCivilDate(int $year, int $month, int $day): bool
+    {
+        if ($year < 1 || $month < 1 || $month > 12 || $day < 1) {
+            return false;
+        }
+
+        if ($month <= 6) {
+            return $day <= 31;
+        }
+
+        if ($month <= 11) {
+            return $day <= 30;
+        }
+
+        $probe = self::create(0);
+        $isLeap = (static function () use ($probe, $year): bool {
+            $method = new \ReflectionMethod(self::class, 'checkLeapYear');
+            $method->setAccessible(true);
+
+            return (bool) $method->invoke($probe, $year);
+        })();
+
+        return $day <= ($isLeap ? 30 : 29);
+    }
+
+    /**
+     * @param array{timezone?: string}|null $options
+     */
+    private static function normalizeQueryTimestamp(int $timestamp, ?array $options = null): ?string
+    {
+        if ($timestamp > 9999999999) {
+            $timestamp = (int) floor($timestamp / 1000);
+        }
+
+        if ($timestamp <= 0) {
+            return null;
+        }
+
+        return self::create($timestamp * 1000, $options)
+            ->format('YYYY-MM-DD HH:mm:ss', ['calendar' => 'gregorian']);
     }
 
     /**
@@ -894,8 +1054,8 @@ class JalaliX
     }
 
     /**
-     * Converts Persian numerals (۰-۹) to Western numerals (0-9) in a string.
-     * @param string $str The string containing Persian numerals.
+     * Converts Persian (۰-۹) and Arabic-Indic (٠-٩) numerals to Western numerals (0-9).
+     * @param string $str The string containing numerals.
      * @return string The string with Western numerals.
      */
     public static function fromPersian(string $str): string
@@ -904,6 +1064,7 @@ class JalaliX
 
         for ($i = 0; $i <= 9; $i++) {
             $output = str_replace(self::$persianNumbers[$i], (string) $i, $output);
+            $output = str_replace(self::$arabicNumbers[$i], (string) $i, $output);
         }
 
         return $output;

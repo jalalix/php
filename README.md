@@ -52,9 +52,25 @@ $now->format('DD MMM YYYY', ['calendar' => 'gregorian']);
 ```php
 JalaliX::parseJalali('1403/12/07');
 JalaliX::parseJalali('۱۴۰۳-۱۲-۰۷ 14:30');
+JalaliX::parseJalali('1403.12.07');
 ```
 
 Named `parseJalali` to mirror the TypeScript API.
+
+### normalizeQueryDate
+
+Soft-normalize loose API/query date values to Gregorian `Y-m-d H:i:s` (or `null`). Does not throw on junk input.
+
+```php
+JalaliX::normalizeQueryDate('1403/12/07', ['timezone' => 'Asia/Tehran']);
+// 2025-02-25 00:00:00
+
+JalaliX::normalizeQueryDate('undefined'); // null
+JalaliX::normalizeQueryDate(1740430800000, ['timezone' => 'Asia/Tehran']);
+```
+
+Detects Jalali when the year is in `1…1899` by default (below common Gregorian years); otherwise Gregorian.
+Override with `jalaliYearMin` / `jalaliYearMax`.
 
 ### toISODate
 
@@ -135,8 +151,9 @@ Static:
 
 - `create($date, $options?)` — timestamp (ms), ISO string, or `DateTimeInterface`
 - `parseJalali($str, $options?)`
+- `normalizeQueryDate($value, $options?)` — loose query dates → Gregorian `Y-m-d H:i:s` or `null`
 - `isValidDate($value)`
-- `toPersian($str)` / `fromPersian($str)`
+- `toPersian($str)` / `fromPersian($str)` — `fromPersian` also accepts Arabic-Indic digits
 - `compare($a, $b)` — true if `$a` is before `$b`
 
 `$options` is `['timezone' => string]` (e.g. `'Asia/Tehran'`).

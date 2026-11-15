@@ -55,6 +55,80 @@ final class JalaliXTest extends TestCase
     {
         $this->assertSame('۱۴۰۳/۱۲/۰۷', JalaliX::toPersian('1403/12/07'));
         $this->assertSame('1403/12/07', JalaliX::fromPersian('۱۴۰۳/۱۲/۰۷'));
+        $this->assertSame('1403/12/07', JalaliX::fromPersian('١٤٠٣/١٢/٠٧'));
+    }
+
+    public function testParseJalaliDotSeparator(): void
+    {
+        $this->assertSame(
+            '2025-02-25',
+            JalaliX::parseJalali('1403.12.07')->toISODate()
+        );
+    }
+
+    public function testNormalizeQueryDateSentinelsAndTimestamps(): void
+    {
+        $this->assertNull(JalaliX::normalizeQueryDate(null));
+        $this->assertNull(JalaliX::normalizeQueryDate('null'));
+        $this->assertNull(JalaliX::normalizeQueryDate(''));
+        $this->assertNull(JalaliX::normalizeQueryDate('undefined'));
+        $this->assertNull(JalaliX::normalizeQueryDate('Invalid Date'));
+        $this->assertNull(JalaliX::normalizeQueryDate('NaN'));
+        $this->assertNull(JalaliX::normalizeQueryDate(0));
+        $this->assertNull(JalaliX::normalizeQueryDate(-1));
+
+        $seconds = 1740430800; // 2025-02-24 21:00:00 UTC / 2025-02-25 00:30:00 Tehran
+        $this->assertSame(
+            '2025-02-24 21:00:00',
+            JalaliX::normalizeQueryDate($seconds, ['timezone' => 'UTC'])
+        );
+        $this->assertSame(
+            '2025-02-25 00:30:00',
+            JalaliX::normalizeQueryDate($seconds * 1000, ['timezone' => 'Asia/Tehran'])
+        );
+    }
+
+    public function testNormalizeQueryDateJalaliAndGregorian(): void
+    {
+        $this->assertSame(
+            '2025-02-25 00:00:00',
+            JalaliX::normalizeQueryDate('1403/12/07', ['timezone' => 'UTC'])
+        );
+        $this->assertSame(
+            '2025-02-25 14:30:00',
+            JalaliX::normalizeQueryDate('۱۴۰۳-۱۲-۰۷ 14:30:00', ['timezone' => 'UTC'])
+        );
+        $this->assertSame(
+            '2025-02-25 00:00:00',
+            JalaliX::normalizeQueryDate('2025.02.25')
+        );
+        $this->assertSame(
+            '2025-02-25 12:30:45',
+            JalaliX::normalizeQueryDate('2025-02-25 12:30:45.123Z')
+        );
+        $this->assertSame(
+            'not-a-date',
+            JalaliX::normalizeQueryDate('not-a-date')
+        );
+
+        // Wider default band than the old 1278–1600 heuristic.
+        $this->assertSame(
+            '2025-02-25 00:00:00',
+            JalaliX::normalizeQueryDate('1403/12/07', ['timezone' => 'UTC'])
+        );
+        $this->assertNotNull(JalaliX::normalizeQueryDate('1200/01/01', ['timezone' => 'UTC']));
+        $this->assertNotNull(JalaliX::normalizeQueryDate('1800/01/01', ['timezone' => 'UTC']));
+
+        // Gregorian years stay Gregorian; override bounds when needed.
+        $this->assertSame('2025-01-01 00:00:00', JalaliX::normalizeQueryDate('2025-01-01'));
+        $this->assertNotSame(
+            '2025-01-01 00:00:00',
+            JalaliX::normalizeQueryDate('2025-01-01', [
+                'timezone' => 'UTC',
+                'jalaliYearMin' => 1,
+                'jalaliYearMax' => 3000,
+            ])
+        );
     }
 
     public function testCompareAndClone(): void
